@@ -1,7 +1,7 @@
 /* Service worker de Nouvelle Ferme Cuniculture Pro.
    Rôle : garder l'application et ses ressources en mémoire pour qu'elle s'ouvre sans Internet.
    Pour publier une nouvelle version, changez le numéro ci-dessous. */
-var VERSION = 'nfcp-v3';
+var VERSION = 'nfcp-v4';
 var CORE = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png', './favicon-32.png'];
 var EXTERNAL = [
   'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
