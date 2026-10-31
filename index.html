@@ -237,6 +237,7 @@ function lotStats(l){
     ready:present>0&&last.g>=tg,mort:pct(morts,l.initial+inn),fed:fed,
     age:l.naissance?diff(today(),l.naissance):null,sinceWeigh:diff(today(),last.date)}}
 function salesNet(s){return (Number(s.qte)||0)*(Number(s.prixUnit)||0)-(Number(s.remise)||0)}
+function saleDue(s){return Math.max(0,salesNet(s)-(Number(s.encaisse)||0))}
 function periodStart(){var p=UI.period,t=today();if(p==='mois')return t.slice(0,8)+'01';if(p==='30j')return addDays(t,-29);return ''}
 function inP(d){var st=periodStart();return !st||(d>=st&&d<=today())}
 function itemQty(it){var q=0;S.mvts.forEach(function(m){if(m.itemId===it.id)q+=m.type==='perte'?-m.qte:m.qte});S.feeds.forEach(function(f){if(f.itemId===it.id)q-=f.kg});return q}
@@ -280,8 +281,8 @@ function alerts(){
   S.stock.forEach(function(it){var q=itemQty(it);if(it.seuil>0&&q<=it.seuil)a.push({c:q<=0?'bad':'warn',t:'Stock bas : '+it.nom,s:num(q,1)+' '+it.unite+' restants (seuil '+num(it.seuil)+' '+it.unite+')'})});
   S.health.forEach(function(h){if(h.suivi&&!h.done){var r=diff(h.suivi,t);if(r<=2)a.push({c:r<0?'warn':'info',t:'Suivi sanitaire '+(r<0?'en retard':r===0?'aujourd’hui':'dans '+r+' j')+' : '+(h.lotId?'lot '+lotLabel(h.lotId):animalLabel(h.animalId)),s:(h.produit||h.type)+' · prévu le '+fdate(h.suivi)})}});
   S.lots.forEach(function(l){var f=attenteLot(l.id);if(f&&lotStats(l).present>0)a.push({c:'warn',t:'Délai d’attente : lot '+l.num,s:'Ne pas commercialiser avant le '+fdate(addDays(f,1))+'. À confirmer avec la notice ou le vétérinaire.'})});
-  var du=sum(S.sales.map(function(s){return{v:salesNet(s)-(Number(s.encaisse)||0)}}),'v');
-  if(du>0)a.push({c:'warn',t:'Créances clients : '+money(du),s:S.sales.filter(function(s){return salesNet(s)>s.encaisse}).length+' vente(s) non soldée(s)'});
+  var du=sum(S.sales.map(function(s){return{v:saleDue(s)}}),'v');
+  if(du>0)a.push({c:'warn',t:'Créances clients : '+money(du),s:S.sales.filter(function(s){return saleDue(s)>0}).length+' vente(s) non soldée(s) · voir Argent, Créances'});
   var lb=S.lastBackup?diff(t,S.lastBackup.slice(0,10)):null;
   if(!storageOk)a.unshift({c:'bad',t:'Stockage indisponible',s:'Les données ne sont pas conservées. Exporter une sauvegarde maintenant.'});
   else if(lb==null||lb>=7)a.push({c:'info',t:'Sauvegarde conseillée',s:lb==null?'Aucune sauvegarde faite pour l’instant.':'Dernière sauvegarde il y a '+lb+' j.'});
@@ -641,8 +642,9 @@ function autoPrice(cat,poids){
   return p[cat]}
 function trancheLabel(poids){var t=cfg().tranches;for(var i=0;i<t.length;i++)if(poids>=t[i].min&&poids<t[i].max)return i===0?'moins de '+num(t[0].max,2)+' kg':i===t.length-1?num(t[i].min,2)+' kg et plus':num(t[i].min,2)+' à moins de '+num(t[i].max,2)+' kg';return ''}
 function vArgent(){
-  var h=seg('argent',[['ventes','Ventes'],['depenses','Dépenses'],['stock','Stock'],['resultats','Résultats']]),g=UI.seg.argent;
+  var h=seg('argent',[['ventes','Ventes'],['creances','Créances'],['depenses','Dépenses'],['stock','Stock'],['resultats','Résultats']]),g=UI.seg.argent;
   if(g==='stock')return h+vStock();
+  if(g==='creances')return h+vCreances();
   if(g==='ventes'){
     var vs=by(S.sales,'date').reverse();
     h+='<section class="blk"><div class="list">'+(vs.length?vs.map(function(s){var net=salesNet(s),solde=net-(Number(s.encaisse)||0);
@@ -667,6 +669,48 @@ function vArgent(){
       return '<button class="row" data-act="openLot" data-id="'+l.id+'"><div class="main"><div class="t">Lot '+esc(l.num)+'</div><div class="s">Ventes '+money(b.ca)+' · coût '+money(b.cout)+(b.parLapin!=null?' · '+money(b.parLapin)+' par lapin vendu':'')+(b.parKg!=null?' · '+money(b.parKg)+' par kg de carcasse':'')+'</div></div><div class="end" style="color:var(--'+(b.marge<0?'bad':'good')+')">'+money(b.marge)+'</div></button>'}).join(''):empty('Aucun lot.'))+'</div>'+
     '<p class="small">Coût d’un lot = aliment distribué × prix du kilo (paramètres) + dépenses rattachées au lot + part des charges communes ('+(cfg().repartition==='effectif'?'répartie selon l’effectif initial':'non répartie')+'). Les achats d’aliments et de reproducteurs ne sont pas répartis, pour éviter un double comptage.</p></section>'}
   return h}
+function vCreances(){
+  var cs=by(S.sales.filter(function(s){return saleDue(s)>0}),'date'),tot=sum(cs.map(function(s){return{v:saleDue(s)}}),'v'),cl={};
+  cs.forEach(function(s){var k=s.client||'Client non précisé';cl[k]=(cl[k]||0)+saleDue(s)});
+  var noms=Object.keys(cl).sort(function(a,b){return cl[b]-cl[a]});
+  var h='<section class="blk"><div class="grid">'+kpi(money(tot),'reste à encaisser','hero')+kpi(String(cs.length),cs.length>1?'ventes non soldées':'vente non soldée')+'</div>';
+  if(noms.length)h+='<div class="card" style="margin-top:8px">'+noms.map(function(n){return kv(esc(n),money(cl[n]))}).join('')+'</div>';
+  h+='</section><section class="blk"><div class="list">'+(cs.length?cs.map(function(s){var j=diff(today(),s.date);
+    return '<button class="row" data-act="payCredit" data-id="'+s.id+'"><div class="main"><div class="t">'+esc(s.num)+' · '+esc(s.client||'Client non précisé')+'</div><div class="s">'+fdate(s.date)+(j>0?' · il y a '+j+' j':'')+' · total '+money(salesNet(s))+' · déjà payé '+money(s.encaisse)+(s.tel?' · '+esc(s.tel):'')+'</div></div><div class="end">'+pill('Reste '+money(saleDue(s)),'warn')+'<div class="small">Toucher pour encaisser</div></div></button>'}).join(''):empty('Aucun crédit en cours. Toutes les ventes sont soldées.'))+'</div></section>';
+  return h}
+function payHistory(s){
+  var ps=s.paiements||[],avant=(Number(s.encaisse)||0)-sum(ps,'montant'),h='';
+  if(avant>0.001)h+='<div class="kv"><span>Encaissé à la vente ou avant</span><span>'+money(avant)+'</span></div>';
+  ps.forEach(function(p){h+='<div class="kv"><span>'+fdate(p.date)+(p.mode?' · '+esc(p.mode):'')+' <button class="btn sm" type="button" data-act="delPay" data-id="'+s.id+'" data-p="'+p.id+'">Retirer</button></span><span>'+money(p.montant)+'</span></div>'});
+  return h?'<div class="card" style="margin-top:8px">'+h+'</div>':''}
+ACT.payCredit=function(d){
+  var s=find(S.sales,d.id);if(!s)return;var due=saleDue(s);
+  if(due<=0){toast('Cette vente est déjà soldée');return}
+  form('Encaisser · '+s.num+(s.client?' · '+s.client:''),[
+    {k:'montant',l:'Montant reçu',hint:'FCFA',t:'number',req:1},
+    {k:'date',l:'Date',t:'date',req:1,half:1},
+    {k:'mode',l:'Paiement',t:'select',opts:MODES.filter(function(m){return m[0]!=='Crédit'}),half:1}],
+    {montant:due,date:today(),mode:'Espèces'},
+    function(v){
+      var cur=find(S.sales,s.id),r=cur?saleDue(cur):0;
+      if(!cur)return 'Vente introuvable.';
+      if(!(v.montant>0))return 'Le montant doit être supérieur à 0.';
+      if(v.montant>r+0.001)return 'Le montant dépasse le reste à payer ('+money(r)+').';
+      cur.paiements=(cur.paiements||[]).concat([{id:uid('p'),date:v.date,montant:v.montant,mode:v.mode}]);
+      cur.encaisse=(Number(cur.encaisse)||0)+v.montant;
+      logOp('Encaissement '+cur.num+' : '+money(v.montant));
+      commit(r-v.montant<=0.001?'Crédit soldé':'Paiement enregistré')},
+    {ok:'Enregistrer le paiement',
+     intro:'Total '+money(salesNet(s))+' · reste à encaisser <b>'+money(due)+'</b>'+payHistory(s),
+     extra:'<button class="btn" type="button" data-act="payAll" data-id="'+s.id+'">Tout solder</button>',
+     live:function(v){var r=due-(v.montant||0);return r<0?'<span style="color:var(--bad)">Le montant dépasse le reste à payer.</span>':'Reste après ce paiement : <b>'+money(r)+'</b>'}})};
+ACT.payAll=function(d){var s=find(S.sales,d.id);if(!s)return;setF('montant',saleDue(s));runLive()};
+ACT.delPay=function(d){
+  var s=find(S.sales,d.id),p=s&&(s.paiements||[]).filter(function(x){return x.id===d.p})[0];if(!p)return;
+  confirmSheet('Retirer le paiement de '+money(p.montant)+' du '+fdate(p.date)+' ? Le reste à encaisser augmentera d’autant.',function(){
+    s.paiements=s.paiements.filter(function(x){return x.id!==p.id});
+    s.encaisse=Math.max(0,(Number(s.encaisse)||0)-p.montant);
+    logOp('Paiement retiré '+s.num+' : '+money(p.montant));commit('Paiement retiré')},'Retirer')};
 function saleFields(){return[
   {k:'date',l:'Date',t:'date',req:1,half:1},{k:'mode',l:'Paiement',t:'select',opts:MODES,half:1},
   {k:'client',l:'Client',half:1},{k:'tel',l:'Téléphone',t:'tel',half:1},
@@ -674,7 +718,7 @@ function saleFields(){return[
   {k:'lotId',l:'Lot',t:'select',opts:opts(lotOpts(false),'Choisir un lot')},{k:'animalId',l:'Reproducteur vendu',t:'select',opts:opts(animalOpts(''),'Choisir')},
   {k:'qte',l:'Quantité',t:'number',step:'1',req:1,half:1},{k:'poids',l:'Poids moyen de carcasse',hint:'kg',t:'number',half:1},
   {k:'prixUnit',l:'Prix unitaire',hint:'FCFA',t:'number',req:1,half:1},{k:'remise',l:'Remise',hint:'FCFA',t:'number',def:0,half:1},
-  {k:'encaisse',l:'Montant encaissé',hint:'FCFA',t:'number',def:0},{k:'resp',l:'Responsable de la vente'},
+  {k:'encaisse',l:'Total encaissé à ce jour',hint:'FCFA · pour un paiement ultérieur, utiliser le bouton Encaisser',t:'number',def:0},{k:'resp',l:'Responsable de la vente'},
   {k:'force',l:'Autoriser malgré un stock insuffisant ou un délai d’attente (sera consigné)',t:'chk'}]}
 function saleLive(state){return function(v,set,show){
   var c=v.cat;show('lotId',c!=='reproducteur');show('animalId',c==='reproducteur');show('poids',c==='carcasse');
@@ -711,7 +755,7 @@ ACT.newSale=function(){var st={};
   form('Nouvelle vente',saleFields(),{date:today(),mode:'Espèces',cat:'vif',lotId:(lotOpts(true)[0]||[''])[0],qte:1,resp:'',encaisse:0},saleSave(null),{live:saleLive(st),ok:'Enregistrer la vente'})};
 ACT.editSale=function(d){
   var s=find(S.sales,d.id),st={cur:{lotId:s.lotId,cat:s.cat,qte:s.qte},auto:s.prixUnit,key:s.cat+'|'+(s.poids||'')};
-  form('Vente '+s.num,saleFields(),s,saleSave(s),{live:saleLive(st),extra:'<button class="btn" type="button" data-act="invoice" data-id="'+s.id+'">Facture PDF</button>',del:function(){confirmSheet('Supprimer la vente '+esc(s.num)+' ? L’effectif ou le stock du lot sera rétabli. Cette opération est consignée.',function(){
+  form('Vente '+s.num,saleFields(),s,saleSave(s),{live:saleLive(st),extra:(saleDue(s)>0?'<button class="btn pri" type="button" data-act="payCredit" data-id="'+s.id+'">Encaisser</button>':'')+'<button class="btn" type="button" data-act="invoice" data-id="'+s.id+'">Facture PDF</button>',del:function(){confirmSheet('Supprimer la vente '+esc(s.num)+' ? L’effectif ou le stock du lot sera rétabli. Cette opération est consignée.',function(){
     S.sales=S.sales.filter(function(x){return x.id!==s.id});logOp('Vente supprimée : '+s.num);commit('Vente supprimée')},'Supprimer')}})};
 function expFields(){return[{k:'date',l:'Date',t:'date',req:1,half:1},{k:'montant',l:'Montant',hint:'FCFA',t:'number',req:1,half:1},
   {k:'cat',l:'Catégorie',t:'select',opts:CATS_DEP.map(function(c){return[c,c]})},{k:'lotId',l:'Rattacher à un lot',t:'select',opts:opts(lotOpts(false),'Non, charge commune')},{k:'note',l:'Note'}]}
